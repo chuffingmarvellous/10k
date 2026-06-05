@@ -1,0 +1,26 @@
+'use client';
+import { useEffect, useMemo, useState } from 'react';
+import { supabase } from '@/lib/supabaseClient';
+import { generatePlan, nextAdvice, pace, predict10k, Run } from '@/lib/training';
+
+function fmt(sec:number|null){ if(!sec) return 'Not enough data'; return `${Math.floor(sec/60)}:${String(sec%60).padStart(2,'0')}`; }
+export default function Page(){
+ const [user,setUser]=useState<any>(null); const [email,setEmail]=useState(''); const [runs,setRuns]=useState<Run[]>([]); const [loading,setLoading]=useState(true);
+ const [form,setForm]=useState({run_date:new Date().toISOString().slice(0,10),distance_km:'6',time:'33:00',effort:'5',notes:''});
+ const plan=useMemo(()=>generatePlan(new Date(),12),[]); const pred=useMemo(()=>predict10k(runs),[runs]);
+ useEffect(()=>{ supabase.auth.getUser().then(({data})=>{setUser(data.user); setLoading(false); if(data.user) loadRuns();}); const {data:{subscription}}=supabase.auth.onAuthStateChange((_e,s)=>{setUser(s?.user??null); if(s?.user) loadRuns();}); return ()=>subscription.unsubscribe();},[]);
+ async function signIn(){ await supabase.auth.signInWithOtp({email, options:{emailRedirectTo: window.location.origin}}); alert('Check your email for the login link.'); }
+ async function loadRuns(){ const {data,error}=await supabase.from('runs').select('*').order('run_date',{ascending:false}); if(!error && data) setRuns(data as any); }
+ function parseTime(t:string){ const bits=t.split(':').map(Number); if(bits.length===2) return bits[0]*60+bits[1]; if(bits.length===3) return bits[0]*3600+bits[1]*60+bits[2]; return Number(t)||0; }
+ async function saveRun(){ const {data:{user}}=await supabase.auth.getUser(); if(!user) return; const row={user_id:user.id,run_date:form.run_date,distance_km:Number(form.distance_km),moving_time_seconds:parseTime(form.time),effort:Number(form.effort),notes:form.notes,source:'manual'}; const {error}=await supabase.from('runs').insert(row); if(error) alert(error.message); else {setForm({...form,notes:''}); loadRuns();} }
+ async function exportJson(){ const blob=new Blob([JSON.stringify({exported_at:new Date().toISOString(),runs},null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='10k-coach-backup.json'; a.click(); }
+ async function deleteRun(id?:string){ if(!id) return; await supabase.from('runs').delete().eq('id',id); loadRuns(); }
+ if(loading) return <main className="wrap"><div className="card">Loading...</div></main>;
+ if(!user) return <main className="wrap"><h1>Sub-50 10k Coach</h1><div className="card"><p>Sign in by email to keep your training log in the cloud.</p><label>Email</label><input value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"/><button onClick={signIn}>Send magic link</button><p className="muted small">After deployment, this app uses Supabase authentication and stores only your run log and settings.</p></div></main>;
+ return <main className="wrap"><h1>Sub-50 10k Coach</h1><div className="nav"><a className="btn" href="/api/strava/connect">Connect Strava</a><button onClick={exportJson}>Export backup</button><button className="danger" onClick={()=>supabase.auth.signOut()}>Sign out</button></div>
+ <section className="grid"><div className="card"><h2>Target</h2><p>Goal: beat <b>50:00</b>. Race pace: <b>5:00/km</b>.</p><p>Current estimate: <b>{fmt(pred)}</b></p></div><div className="card"><h2>Coach notes</h2>{nextAdvice(runs).map((x,i)=><p key={i}>{x}</p>)}</div></section>
+ <section className="card"><h2>Log a run</h2><div className="grid"><div><label>Date</label><input type="date" value={form.run_date} onChange={e=>setForm({...form,run_date:e.target.value})}/></div><div><label>Distance km</label><input inputMode="decimal" value={form.distance_km} onChange={e=>setForm({...form,distance_km:e.target.value})}/></div><div><label>Time mm:ss or hh:mm:ss</label><input value={form.time} onChange={e=>setForm({...form,time:e.target.value})}/></div><div><label>Effort 1-10</label><input inputMode="numeric" value={form.effort} onChange={e=>setForm({...form,effort:e.target.value})}/></div></div><label>Notes</label><textarea value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})}/><button onClick={saveRun}>Save run</button></section>
+ <section className="card"><h2>Next 12-week plan</h2><p className="muted">Use this as the base plan. The coach notes adjust your next effort based on actual runs.</p><table><thead><tr><th>Week</th><th>Day</th><th>Session</th><th>Target</th></tr></thead><tbody>{plan.slice(0,18).map((w,i)=><tr key={i}><td>{w.week}</td><td>{w.day}</td><td><b>{w.title}</b><br/><span className="small">{w.detail}</span></td><td>{w.target}</td></tr>)}</tbody></table></section>
+ <section className="card"><h2>Run log</h2><table><thead><tr><th>Date</th><th>Run</th><th>Pace</th><th></th></tr></thead><tbody>{runs.map((r:any)=><tr key={r.id}><td>{r.run_date}</td><td>{r.distance_km} km in {fmt(r.moving_time_seconds)}<br/><span className="small muted">{r.source||'manual'} {r.notes?`· ${r.notes}`:''}</span></td><td>{pace(r.moving_time_seconds,r.distance_km)}</td><td><button className="danger" onClick={()=>deleteRun(r.id)}>Delete</button></td></tr>)}</tbody></table></section>
+ </main>
+}
